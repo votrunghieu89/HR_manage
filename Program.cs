@@ -64,7 +64,11 @@ builder.Services.AddScoped<PositionDAL>();
 builder.Services.AddScoped<DepartmentDAL>();
 builder.Services.AddScoped<AttendanceDAL>();
 builder.Services.AddScoped<AuthDAL>(); // DAL cho Authentication
-
+var port = Environment.GetEnvironmentVariable("PORT");
+if (!string.IsNullOrEmpty(port))
+{
+    app.Urls.Add($"http://*:{port}");
+}
 // 3. CORS (Cross-Origin Resource Sharing)
 builder.Services.AddCors(options =>
 {
