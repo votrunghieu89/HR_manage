@@ -29,7 +29,7 @@ namespace Integration_System.Dtos.EmployeeDTO
         public DateTime HireDate { get; set; }
         ////////////////////
         [Range(1, int.MaxValue, ErrorMessage = "ID phòng ban không hợp lệ")]
-        public int? DepartmentId { get; set; }
+        public int DepartmentId { get; set; }
         ////////////////////
         [Range(1, int.MaxValue, ErrorMessage = "ID chức vụ không hợp lệ")]
         public int? PositionId { get; set; }

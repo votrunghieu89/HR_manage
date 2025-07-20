@@ -45,7 +45,7 @@ namespace Integration_System.Controllers
         {
             try
             {
-                DepartmentModel? department = await _departmentDAL.GetDepartmentByID(DepartmentID);
+                string department = await _departmentDAL.GetDepartmentByID(DepartmentID);
                 if (department == null)
                 {
                     _logger.LogWarning($"Department with ID {DepartmentID} not found");

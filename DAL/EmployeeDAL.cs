@@ -25,16 +25,13 @@ namespace Integration_System.DAL
     {
         public readonly string _mySQlConnectionString;
         public readonly string _SQLServerConnectionString;
-        private readonly UserManager<IdentityUser> _userManager;
-        private readonly RoleManager<IdentityRole> _roleManager;
+   
         private readonly ILogger<EmployeeDAL> _logger;
         private readonly IAuthService _authService;
 
-        public EmployeeDAL(UserManager<IdentityUser> userManager, RoleManager<IdentityRole> roleManager, ILogger<EmployeeDAL> logger, IConfiguration configuration, IAuthService authService)
+        public EmployeeDAL(ILogger<EmployeeDAL> logger, IConfiguration configuration, IAuthService authService)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _userManager = userManager ?? throw new ArgumentNullException(nameof(userManager));
-            _roleManager = roleManager ?? throw new ArgumentNullException(nameof(roleManager));
             _authService = authService ?? throw new ArgumentNullException(nameof(authService));
             _mySQlConnectionString = configuration?.GetConnectionString("MySqlConnection")
                                      ?? throw new ArgumentNullException(nameof(configuration), "MySqlConnection string is null.");
@@ -138,80 +135,7 @@ namespace Integration_System.DAL
             }
             return employees;
         }
-        public async Task<InsertEmployeeResult> checkInsert(EmployeeInsertDTO employeeDTO)
-        {
-            if (string.IsNullOrWhiteSpace(employeeDTO.Email))
-            {
-                _logger.LogWarning("Attempted to insert employee with null or empty email.");
-                return InsertEmployeeResult.Failed;
-            }
-
-            using var connectionSQLServer = new SqlConnection(_SQLServerConnectionString);
-            try
-            {
-                await connectionSQLServer.OpenAsync();
-                _logger.LogDebug("SQL Server connection opened for checkInsert.");
-
-                string checkEmailQuery = @"SELECT COUNT(*) FROM Employees WHERE Email = @Email";
-                using (SqlCommand checkEmailCommand = new SqlCommand(checkEmailQuery, connectionSQLServer))
-                {
-                    checkEmailCommand.Parameters.AddWithValue("@Email", employeeDTO.Email);
-                    var emailCount = (int)await checkEmailCommand.ExecuteScalarAsync();
-                    if (emailCount > 0)
-                    {
-                        _logger.LogWarning("Employee Email '{Email}' already exists in Employees table.", employeeDTO.Email);
-                        return InsertEmployeeResult.EmailAlreadyExists;
-                    }
-                }
-
-                var identityUser = await _userManager.FindByEmailAsync(employeeDTO.Email);
-                if (identityUser != null)
-                {
-                    _logger.LogWarning("Email '{Email}' already exists in Identity system.", employeeDTO.Email);
-                    return InsertEmployeeResult.EmailAlreadyExists;
-                }
-
-                string checkDepartmentQuery = @"SELECT COUNT(*) FROM Departments WHERE DepartmentID = @DepartmentId";
-                using (SqlCommand checkDepartmentCommand = new SqlCommand(checkDepartmentQuery, connectionSQLServer))
-                {
-                    checkDepartmentCommand.Parameters.AddWithValue("@DepartmentId", employeeDTO.DepartmentId ?? 0);
-                    var deptCount = (int)await checkDepartmentCommand.ExecuteScalarAsync();
-                    if (deptCount == 0)
-                    {
-                        _logger.LogWarning("Invalid DepartmentId provided: {DepartmentId}", employeeDTO.DepartmentId);
-                        return InsertEmployeeResult.InvalidDepartment;
-                    }
-                }
-
-                string checkPositionQuery = @"SELECT COUNT(*) FROM Positions WHERE PositionID = @PositionID";
-                using (SqlCommand checkPositionCommand = new SqlCommand(checkPositionQuery, connectionSQLServer))
-                {
-                    checkPositionCommand.Parameters.AddWithValue("@PositionID", employeeDTO.PositionId ?? 0);
-                    var postCount = (int)await checkPositionCommand.ExecuteScalarAsync();
-                    if (postCount == 0)
-                    {
-                        _logger.LogWarning("Invalid PositionId provided: {PositionId}", employeeDTO.PositionId);
-                        return InsertEmployeeResult.InvalidPosition;
-                    }
-                }
-                _logger.LogInformation("checkInsert validation passed for email {Email}.", employeeDTO.Email);
-                return InsertEmployeeResult.Success;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error during checkInsert validation for email {Email}.", employeeDTO.Email);
-                return InsertEmployeeResult.Failed;
-            }
-            finally
-            {
-                if (connectionSQLServer.State == ConnectionState.Open)
-                {
-                    await connectionSQLServer.CloseAsync();
-                    _logger.LogDebug("SQL Server connection closed for checkInsert.");
-                }
-            }
-
-        }
+       
 
         public async Task<bool> InsertEmployeeAsync(EmployeeInsertDTO employeeDTO)
         {
@@ -228,14 +152,13 @@ namespace Integration_System.DAL
 
             using var connectionSQLServer = new SqlConnection(_SQLServerConnectionString);
             using var connectionMySQL = new MySqlConnection(_mySQlConnectionString);
-            SqlTransaction? sqlTransaction = null;
-            IdentityUser? identityUser = null;
+     
             int? newEmployeeID = null;
 
             try
             {
                 await connectionSQLServer.OpenAsync();
-                sqlTransaction = connectionSQLServer.BeginTransaction();
+             
                 _logger.LogInformation("✅ Kết nối SQL Server thành công và bắt đầu transaction.");
 
                 string querySQLServer = @"
@@ -245,7 +168,7 @@ namespace Integration_System.DAL
             VALUES
             (@FullName, @DateofBirth, @Gender, @PhoneNumber, @Email, @HireDate, @DepartmentId, @PositionId, @Status, @CreatedAt, @UpdatedAt);";
 
-                using (SqlCommand commandSQLServer = new SqlCommand(querySQLServer, connectionSQLServer, sqlTransaction))
+                using (SqlCommand commandSQLServer = new SqlCommand(querySQLServer, connectionSQLServer))
                 {
                     commandSQLServer.Parameters.AddWithValue("@FullName", employeeDTO.FullName);
                     commandSQLServer.Parameters.AddWithValue("@DateofBirth", employeeDTO.DateofBirth);
@@ -263,7 +186,7 @@ namespace Integration_System.DAL
                     if (insertedIdObj == null || !int.TryParse(insertedIdObj.ToString(), out int id))
                     {
                         _logger.LogError("❌ Insert vào SQL Server thất bại hoặc không trả về ID.");
-                        await sqlTransaction.RollbackAsync();
+                     
                         return false;
                     }
                     newEmployeeID = id;
@@ -271,49 +194,6 @@ namespace Integration_System.DAL
                 }
 
                 _logger.LogInformation("Đang tạo người dùng Identity...");
-
-                var userExists = await _userManager.FindByNameAsync(employeeDTO.Email);
-                if (userExists != null)
-                {
-                    await sqlTransaction.RollbackAsync();
-                    return false;
-                }
-
-                identityUser = new IdentityUser()
-                {
-                    Id = newEmployeeID.Value.ToString(),
-                    Email = employeeDTO.Email,
-                    SecurityStamp = Guid.NewGuid().ToString(),
-                    UserName = employeeDTO.Email, // Use Email as UserName
-                    EmailConfirmed = true,
-                };
-
-                string initialPassword = employeeDTO.PhoneNumber ?? $"DefaultP@ss{Guid.NewGuid().ToString("N").Substring(0, 8)}";
-                if (string.IsNullOrWhiteSpace(initialPassword) || initialPassword.Length < 6)
-                {
-                    initialPassword = $"SecureP@ss{Guid.NewGuid().ToString("N").Substring(0, 8)}";
-                    _logger.LogWarning("Số điện thoại không hợp lệ/thiếu, đã tạo mật khẩu mặc định mạnh cho người dùng {FinalUsername}.", employeeDTO.Email);
-                }
-                _logger.LogInformation("Tạo Identity user với mật khẩu ban đầu (nên được thay đổi).");
-
-                var identityResult = await _userManager.CreateAsync(identityUser, initialPassword);
-                if (!identityResult.Succeeded)
-                {
-                    LogIdentityErrors("CreateAsync", employeeDTO.Email, identityResult.Errors);
-                    await sqlTransaction.RollbackAsync();
-                    return false;
-                }
-                _logger.LogInformation("✅ Identity user {FinalUsername} đã được tạo thành công với ID: {UserId}.", employeeDTO.Email, identityUser.Id);
-
-                bool roleAssigned = await _authService.SetRole(employeeDTO.DepartmentId ?? 0, employeeDTO.Email, identityUser);
-                if (!roleAssigned)
-                {
-                    _logger.LogError("❌ Gán vai trò thất bại cho người dùng {FinalUsername}. Rollback và xóa user.", employeeDTO.Email);
-                    await _userManager.DeleteAsync(identityUser);
-                    await sqlTransaction.RollbackAsync();
-                    return false;
-                }
-                _logger.LogInformation("✅ Đã gán vai trò thành công cho người dùng {FinalUsername}.", employeeDTO.Email);
 
                 await connectionMySQL.OpenAsync();
                 _logger.LogInformation("✅ Kết nối MySQL thành công!");
@@ -332,14 +212,13 @@ namespace Integration_System.DAL
                     if (rowsAffectedMySQL <= 0)
                     {
                         _logger.LogError("❌ Insert vào MySQL thất bại (không có dòng nào bị ảnh hưởng). Rollback và xóa user.");
-                        await _userManager.DeleteAsync(identityUser);
-                        await sqlTransaction.RollbackAsync();
+                      
                         return false;
                     }
                     _logger.LogInformation("✅ Insert vào MySQL thành công.");
                 }
 
-                await sqlTransaction.CommitAsync();
+             
                 _logger.LogInformation("✅ Insert thành công vào cả hai hệ thống và tạo Identity user. SQL Transaction Committed.");
                 return true;
 
@@ -347,31 +226,6 @@ namespace Integration_System.DAL
             catch (Exception ex)
             {
                 _logger.LogError(ex, "❌ Lỗi nghiêm trọng trong quá trình InsertEmployeeAsync cho Email: {Email}", employeeDTO?.Email);
-                if (sqlTransaction != null && connectionSQLServer.State == ConnectionState.Open)
-                {
-                    try { await sqlTransaction.RollbackAsync(); _logger.LogWarning("SQL Server transaction rolled back do exception."); }
-                    catch (Exception rbEx) { _logger.LogError(rbEx, "Lỗi khi rollback SQL Server transaction."); }
-                }
-                if (identityUser != null && !string.IsNullOrEmpty(identityUser.Id))
-                {
-                    var userToDelete = await _userManager.FindByIdAsync(identityUser.Id);
-                    if (userToDelete != null)
-                    {
-                        try
-                        {
-                            await _userManager.DeleteAsync(userToDelete);
-                            _logger.LogWarning("Đã cố gắng xóa Identity user {Username} do exception.", identityUser.UserName);
-                        }
-                        catch (Exception deleteEx)
-                        {
-                            _logger.LogError(deleteEx, "Lỗi khi cố gắng xóa Identity user {Username} sau exception.", identityUser.UserName);
-                        }
-                    }
-                    else
-                    {
-                        _logger.LogWarning("Identity user {Username} không được tìm thấy để xóa sau exception (có thể chưa được tạo thành công).", identityUser.UserName);
-                    }
-                }
                 return false;
             }
             finally
@@ -464,18 +318,18 @@ namespace Integration_System.DAL
                     }
                 }
 
-                bool authUserDeleted = await _authService.DeleteUser(emailToDelete);
+                //bool authUserDeleted = await _authService.DeleteUser(emailToDelete);
 
-                if (!authUserDeleted)
-                {
-                    _logger.LogError("CRITICAL: Failed to delete Identity user with email {Email} (associated with EmployeeID {EmployeeId}). Manual cleanup of Identity user might be required!", emailToDelete, EmployeeId);
-                }
-                else
-                {
-                    _logger.LogInformation("Successfully requested deletion of Identity user with email {Email}.", emailToDelete);
-                }
+                //if (!authUserDeleted)
+                //{
+                //    _logger.LogError("CRITICAL: Failed to delete Identity user with email {Email} (associated with EmployeeID {EmployeeId}). Manual cleanup of Identity user might be required!", emailToDelete, EmployeeId);
+                //}
+                //else
+                //{
+                //    _logger.LogInformation("Successfully requested deletion of Identity user with email {Email}.", emailToDelete);
+                //}
 
-                await sqlTransaction.CommitAsync();
+                //await sqlTransaction.CommitAsync();
                 _logger.LogInformation("SQL Server transaction committed for DeleteEmployeeAsync (ID: {EmployeeId}). Employee deletion process completed (Identity user deletion status logged separately).", EmployeeId);
                 return true;
 
@@ -617,87 +471,6 @@ namespace Integration_System.DAL
                         _logger.LogInformation("✅ Updated record in MySQL employees table for ID: {EmployeeId}", EmployeeId);
                     }
                 }
-                
-                var user = await _userManager.FindByIdAsync(EmployeeId.ToString());
-                if (user == null)
-                {
-                    user = await _userManager.FindByEmailAsync(oldEmail);
-                }
-
-                if (user == null)
-                {
-                    _logger.LogError("CRITICAL INCONSISTENCY: Identity user with ID {EmployeeId} or old email {OldEmail} not found during update. Manual intervention required.", EmployeeId, oldEmail);
-                    await sqlTransaction.RollbackAsync();
-                    return false;
-                }
-
-
-                bool identityNeedsUpdate = false;
-                if (!string.Equals(oldEmail, employeeDTO.Email, StringComparison.OrdinalIgnoreCase))
-                {
-                    var existingUserWithNewEmail = await _userManager.FindByEmailAsync(employeeDTO.Email);
-                    if (existingUserWithNewEmail != null && existingUserWithNewEmail.Id != user.Id)
-                    {
-                        _logger.LogError("Cannot update email for user {Username} (EmployeeID {EmployeeId}): New email '{NewEmail}' is already taken by another user.", user.UserName, EmployeeId, employeeDTO.Email);
-                        await sqlTransaction.RollbackAsync();
-                        return false;
-                    }
-
-                    _logger.LogInformation("Updating Identity email for user {Username} from {OldEmail} to {NewEmail}", user.UserName, oldEmail, employeeDTO.Email);
-                    var setEmailResult = await _userManager.SetEmailAsync(user, employeeDTO.Email);
-                    if (!setEmailResult.Succeeded) { LogIdentityErrors("SetEmailAsync", user.UserName ?? "unknown", setEmailResult.Errors); }
-                    else
-                    {
-                        user.NormalizedEmail = _userManager.NormalizeEmail(employeeDTO.Email);
-                        identityNeedsUpdate = true;
-                    }
-                }
-
-
-                if (!string.Equals(user.UserName, employeeDTO.Email, StringComparison.OrdinalIgnoreCase))
-                {
-                    var existingUserWithNewUserName = await _userManager.FindByNameAsync(employeeDTO.Email);
-                    if (existingUserWithNewUserName != null && existingUserWithNewUserName.Id != user.Id)
-                    {
-                        _logger.LogError("Cannot update username for user {OldUsername} (EmployeeID {EmployeeId}): New username '{NewUsername}' (email) is already taken by another user.", user.UserName, EmployeeId, employeeDTO.Email);
-                        await sqlTransaction.RollbackAsync();
-                        return false;
-                    }
-
-
-                    _logger.LogInformation("Updating Identity username for user {OldUsername} to {NewUsername}", user.UserName, employeeDTO.Email);
-                    var setUsernameResult = await _userManager.SetUserNameAsync(user, employeeDTO.Email);
-                    if (!setUsernameResult.Succeeded) { LogIdentityErrors("SetUserNameAsync", user.UserName ?? "unknown", setUsernameResult.Errors); }
-                    else
-                    {
-                        user.NormalizedUserName = _userManager.NormalizeName(employeeDTO.Email);
-                        identityNeedsUpdate = true;
-                    }
-                }
-
-
-                if (identityNeedsUpdate)
-                {
-                    var updateResult = await _userManager.UpdateAsync(user);
-                    if (!updateResult.Succeeded) { LogIdentityErrors("UpdateAsync", user.UserName ?? "unknown", updateResult.Errors); }
-                    else { _logger.LogInformation("Successfully updated Identity user details for {Username}.", user.UserName); }
-                }
-
-                string newRole = GetRoleForDepartment(employeeDTO.DepartmentId ?? 0);
-                var currentRoles = await _userManager.GetRolesAsync(user);
-
-                if (!currentRoles.Contains(newRole))
-                {
-                    _logger.LogInformation("Updating Identity role for user {Username} to '{NewRole}' based on new DepartmentId {DepartmentId}.", user.UserName, newRole, employeeDTO.DepartmentId);
-                    bool roleSetResult = await _authService.SetRole(employeeDTO.DepartmentId ?? 0, user.UserName ?? "unknown", user);
-                    if (!roleSetResult)
-                    {
-                        _logger.LogError("Failed to update role for user {Username}. Consider manual check or rollback.", user.UserName);
-                    }
-                }
-
-                await sqlTransaction.CommitAsync();
-                _logger.LogInformation("✅ Successfully updated employee {EmployeeId} in all systems. SQL Transaction Committed.", EmployeeId);
                 return true;
             }
             catch (Exception ex)

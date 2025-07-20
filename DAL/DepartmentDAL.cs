@@ -67,22 +67,22 @@ namespace Integration_System.DAL
             }
             return departments;
         }
-        public async Task<DepartmentModel> GetDepartmentByID(int DepartmentID)
+        public async Task<string> GetDepartmentByID(int DepartmentID)
         {
             using var connectionSQlServer = new SqlConnection(_SQLServerConnectionString);
             SqlDataReader readerSQLServer = null;
             try
             {
-                DepartmentModel department = new DepartmentModel();
+                string department;
                 await connectionSQlServer.OpenAsync();
-                string query = @"SELECT * FROM Departments  WHERE DepartmentID = @DepartmentID";
+                string query = @"SELECT DepartmentName FROM Departments  WHERE DepartmentID = @DepartmentID";
                 SqlCommand command = new SqlCommand(query, connectionSQlServer);
                 command.Parameters.AddWithValue("@DepartmentID", DepartmentID);
-                Console.WriteLine(DepartmentID);
+       
                 readerSQLServer = (SqlDataReader)await command.ExecuteReaderAsync();
                 if (await readerSQLServer.ReadAsync())
                 {
-                    department = MapReaderSQLServerToDepartmentModel(readerSQLServer);
+                    department = readerSQLServer.GetString(readerSQLServer.GetOrdinal("DepartmentName"));
                 }
                 else
                 {

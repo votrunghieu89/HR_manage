@@ -63,6 +63,7 @@ builder.Services.AddScoped<SalaryDAL>();
 builder.Services.AddScoped<PositionDAL>();
 builder.Services.AddScoped<DepartmentDAL>();
 builder.Services.AddScoped<AttendanceDAL>();
+builder.Services.AddScoped<AuthDAL>(); // DAL cho Authentication
 
 // 3. CORS (Cross-Origin Resource Sharing)
 builder.Services.AddCors(options =>
@@ -106,28 +107,14 @@ builder.Services.AddTransient<IGmailService, GmailService>();
 // 7. DbContext cho Authentication (IntegrationAuthDB)
 
 builder.Services.AddScoped<IAuthService, AuthService>();
-var authConnectionString = builder.Configuration.GetConnectionString("AuthDbConnection");
-if (string.IsNullOrEmpty(authConnectionString))
-{
-    throw new InvalidOperationException("Connection string 'AuthDbConnection' not found in appsettings.json.");
-}
-builder.Services.AddDbContext<AuthDbContext>(options =>
-    options.UseSqlServer(authConnectionString));
+//var authConnectionString = builder.Configuration.GetConnectionString("AuthDbConnection");
+//if (string.IsNullOrEmpty(authConnectionString))
+//{
+//    throw new InvalidOperationException("Connection string 'AuthDbConnection' not found in appsettings.json.");
+//}
+//builder.Services.AddDbContext<AuthDbContext>(options =>
+//    options.UseSqlServer(authConnectionString));
 
-// 8. Cấu hình ASP.NET Core Identity
-builder.Services.AddIdentity<IdentityUser, IdentityRole>(options =>
-{
-    // Tùy chỉnh yêu cầu mật khẩu (có thể nới lỏng trong dev, siết chặt trong prod)
-    options.Password.RequireDigit = true;
-    options.Password.RequiredLength = 6;
-    options.Password.RequireNonAlphanumeric = false;
-    options.Password.RequireUppercase = false;
-    options.Password.RequireLowercase = false;
-    // Tắt yêu cầu xác nhận email/số điện thoại nếu không cần
-    options.SignIn.RequireConfirmedAccount = false;
-})
-.AddEntityFrameworkStores<AuthDbContext>() // Sử dụng EF Core để lưu trữ dữ liệu Identity
-.AddDefaultTokenProviders(); // Cung cấp token cho reset password, 2FA,...
 
 // 9. Cấu hình JWT Authentication
 builder.Services.AddAuthentication(options =>

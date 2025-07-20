@@ -13,24 +13,24 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using Integration_System.Services;
 using Integration_System.DAL;
+using Integration_System.Model;
 namespace Integration_System.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
     public class AuthController : ControllerBase
     {
-        private readonly UserManager<IdentityUser> _userManager;
-        private readonly RoleManager<IdentityRole> _roleManager;
         private readonly IConfiguration _configuration;
         private readonly ILogger<AuthController> _logger;
         private readonly IAuthService _authService;
-        public AuthController(UserManager<IdentityUser> userManager, RoleManager<IdentityRole> roleManager, IConfiguration configuration, ILogger<AuthController> logger, IAuthService authService)
+        private readonly AuthDAL _authDAL;
+        public AuthController( IConfiguration configuration, ILogger<AuthController> logger, IAuthService authService, AuthDAL authDAL)
         {
-            _userManager = userManager;
-            _roleManager = roleManager;
             _configuration = configuration;
             _logger = logger;
             _authService = authService;
+            _authDAL = authDAL;
+
         }
 
         [HttpPost("register/admin")]
@@ -40,66 +40,31 @@ namespace Integration_System.Controllers
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> Register([FromBody] RegisterDto model)
         {
-            if (!ModelState.IsValid)
+            string role = UserRoles.Admin; // Default role for registration
+            AuthModel newUser = new AuthModel
             {
-                return BadRequest(ModelState);
-            }
-            _logger.LogInformation("Registration attempt for email: {Email}", model.Email);
-
-            var emailExists = await _userManager.FindByEmailAsync(model.Email);
-            if (emailExists != null)
-            {
-                _logger.LogWarning("Registration failed: Email {Email} already exists.", model.Email);
-                return BadRequest(new ProblemDetails { Title = "Bad Request", Detail = $"Email '{model.Email}' already exists!" });
-            }
-
-            var userExists = await _userManager.FindByNameAsync(model.Email);
-            if (userExists != null)
-            {
-                _logger.LogWarning("Registration failed: Username (Email) {Email} already exists.", model.Email);
-                return BadRequest(new ProblemDetails { Title = "Bad Request", Detail = $"Username '{model.Email}' already exists!" });
-            }
-
-
-            IdentityUser user = new()
-            {
+                UserName = model.Username,
                 Email = model.Email,
-                SecurityStamp = Guid.NewGuid().ToString(),
-                UserName = model.Email, // Use Email as UserName
-                EmailConfirmed = true,
+                Password = model.Password,
+                Role = role
             };
-
-            var result = await _userManager.CreateAsync(user, model.Password);
-            if (!result.Succeeded)
+            bool emailExists = await _authDAL.CheckEmailExists(model.Email);
+            if (emailExists)
             {
-                var errors = string.Join(", ", result.Errors.Select(e => $"{e.Code}: {e.Description}"));
-                _logger.LogError("User creation failed for {Email}. Errors: {Errors}", model.Email, errors);
-                return StatusCode(StatusCodes.Status500InternalServerError, new ProblemDetails { Title = "User Creation Failed", Detail = errors });
+                _logger.LogWarning("Email already exists: {Email}", model.Email);
+                return BadRequest(new ProblemDetails { Title = "Bad Request", Detail = "Email already exists." });
             }
-
-            _logger.LogInformation("User with email {Email} created successfully. Assigning default role.", model.Email);
-
-            if (await _roleManager.RoleExistsAsync(UserRoles.Admin))
-            {
-                var addToRoleResult = await _userManager.AddToRoleAsync(user, UserRoles.Admin);
-                if (addToRoleResult.Succeeded)
-                {
-                    _logger.LogInformation("Assigned role '{RoleName}' to user {Email}.", UserRoles.Admin, model.Email);
-                }
-                else
-                {
-                    var roleErrors = string.Join(", ", addToRoleResult.Errors.Select(e => $"{e.Code}: {e.Description}"));
-                    _logger.LogError("Failed to assign role '{RoleName}' to user {Email}. Errors: {Errors}", UserRoles.Admin, model.Email, roleErrors);
-                }
+            bool isRegistered = await _authDAL.InsertNewUser(newUser);
+            if (isRegistered) {
+                _logger.LogInformation("New user registered successfully: {Email}", model.Email);
+                return CreatedAtAction(nameof(Login), new { email = model.Email }, new { message = "User registered successfully." });
             }
             else
             {
-                _logger.LogWarning("Role '{RoleName}' does not exist. Cannot assign to user {Email}.", UserRoles.Admin, model.Email);
+                _logger.LogError("Failed to register new user: {Email}", model.Email);
+                return StatusCode(StatusCodes.Status500InternalServerError, new ProblemDetails { Title = "Server Error", Detail = "Failed to register user." });
             }
-
-            return StatusCode(StatusCodes.Status201Created, new { Message = "User created successfully!" });
         }
-
         [HttpPost("login")]
         [AllowAnonymous]
         [ProducesResponseType(typeof(LoginResponseDto), StatusCodes.Status200OK)]
@@ -107,29 +72,35 @@ namespace Integration_System.Controllers
         [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> Login([FromBody] LoginDto model)
         {
-            if (!ModelState.IsValid)
-            {
-                return BadRequest(ModelState);
-            }
-            _logger.LogInformation("Login attempt for user: {email}", model.Email);
-
-            var user = await _userManager.FindByEmailAsync(model.Email);
-            if (user != null && await _userManager.CheckPasswordAsync(user, model.Password))
-            {
-                var userRoles = await _userManager.GetRolesAsync(user);
-
-                var authClaims = new List<Claim>
+            if (model == null)
                 {
-                    new Claim(ClaimTypes.NameIdentifier, user.Id),
-                    new Claim(ClaimTypes.Name, user.Email ?? string.Empty), // Use Email for Name claim
-                    new Claim(JwtRegisteredClaimNames.Email, user.Email ?? ""),
+                    _logger.LogError("Login called with null model.");
+                    return BadRequest(new ProblemDetails { Title = "Bad Request", Detail = "Invalid login request." });
+                }
+            bool isCheck = await _authDAL.CheckEmailExists(model.Email);
+                if (!isCheck)
+                {
+                    _logger.LogWarning("Login failed for user: {Email}. Email does not exist.", model.Email);
+                    return Unauthorized(new ProblemDetails { Title = "Unauthorized", Detail = "Invalid email or password." });
+                }
+                bool isVerify = await _authDAL.CheckLogin(model.Email,model.Password);
+                if (!isVerify)
+                {
+                    _logger.LogWarning("Login failed for user: {Email}. Invalid password.", model.Email);
+                    return Unauthorized(new ProblemDetails { Title = "Unauthorized", Detail = "Invalid email or password." });
+                }
+
+                AuthModel user = await _authDAL.GetUserByEmailPassword(model.Email, model.Password);
+                Console.WriteLine("ádasdasdasdsad"+user);
+            var authClaims = new List<Claim>
+                {
+                    new Claim(ClaimTypes.Name, user.Email),
+                    new Claim(JwtRegisteredClaimNames.Sub, model.Email),
                     new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+                    new Claim(ClaimTypes.Role, user.Role)
                 };
 
-                foreach (var userRole in userRoles)
-                {
-                    authClaims.Add(new Claim(ClaimTypes.Role, userRole));
-                }
+           
 
                 var token = _authService.CreateToken(authClaims);
                 var tokenString = new JwtSecurityTokenHandler().WriteToken(token);
@@ -137,17 +108,11 @@ namespace Integration_System.Controllers
                 _logger.LogInformation("Login successful for user: {email}", model.Email);
                 return Ok(new LoginResponseDto
                 {
-                    Id = user.Id,
                     Token = tokenString,
                     Expiration = token.ValidTo,
-                    Username = user.Email, // Return Email as Username
-                    Roles = userRoles.ToList(),
-                   
-
+                    Username = model.Email, // Return Email as Username
+                    Roles = user.Role,
                 });
-            }
-            _logger.LogWarning("Login failed for user: {Email}. Invalid Email or password.", model.Email);
-            return Unauthorized(new ProblemDetails { Title = "Unauthorized", Detail = "Invalid email or password." });
         }
     }
 }

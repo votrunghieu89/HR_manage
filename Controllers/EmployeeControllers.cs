@@ -9,7 +9,8 @@ using Integration_System.Middleware ;
 using static Integration_System.ENUM; 
 using Microsoft.AspNetCore.Authorization; 
 using Integration_System.Constants;       
-using System.Security.Claims;             
+using System.Security.Claims;
+using Integration_System.Services;
 
 namespace Integration_System.Controllers
 {
@@ -21,15 +22,20 @@ namespace Integration_System.Controllers
         private readonly EmployeeDAL _employeeDAL;
         private readonly ILogger<EmployeeControllers> _logger;
         private readonly NotificationSalaryMDW _notificationSalaryMDW;
-
+        private readonly IAuthService _authService;
+        private readonly AuthDAL _authDAL;
         public EmployeeControllers(
             EmployeeDAL employeeDAL,
             ILogger<EmployeeControllers> logger,
-            NotificationSalaryMDW notificationSalaryMDW)
+            NotificationSalaryMDW notificationSalaryMDW,
+            IAuthService authService,
+            AuthDAL authDAL)
         {
             _employeeDAL = employeeDAL;
             _logger = logger;
             _notificationSalaryMDW = notificationSalaryMDW;
+            _authService = authService;
+            _authDAL = authDAL;
         }
 
         [HttpGet]
@@ -105,22 +111,7 @@ namespace Integration_System.Controllers
             }
             try
             {
-                var result = await _employeeDAL.checkInsert(employeeDTO);
-                switch (result)
-                {
-                    case InsertEmployeeResult.EmailAlreadyExists:
-                        _logger.LogWarning("CreateEmployee failed: Email {Email} already exists (Attempt by User {User}).", employeeDTO.Email, User.Identity?.Name);
-                        return BadRequest(new ProblemDetails { Title = "Bad Request", Detail = "Email already exists." });
-                    case InsertEmployeeResult.InvalidDepartment:
-                        _logger.LogWarning("CreateEmployee failed: Invalid DepartmentId {DepartmentId} (Attempt by User {User}).", employeeDTO.DepartmentId, User.Identity?.Name);
-                        return BadRequest(new ProblemDetails { Title = "Bad Request", Detail = "Department ID is invalid." });
-                    case InsertEmployeeResult.InvalidPosition:
-                        _logger.LogWarning("CreateEmployee failed: Invalid PositionId {PositionId} (Attempt by User {User}).", employeeDTO.PositionId, User.Identity?.Name);
-                        return BadRequest(new ProblemDetails { Title = "Bad Request", Detail = "Position ID is invalid." });
-                    case InsertEmployeeResult.Failed:
-                        _logger.LogWarning("Failed to create employee (DAL check failed) (Attempt by User {User}).", User.Identity?.Name);
-                        return BadRequest(new ProblemDetails { Title = "Bad Request", Detail = "Failed to create employee during validation." });
-                    case InsertEmployeeResult.Success:
+               
                         bool createdEmployee = await _employeeDAL.InsertEmployeeAsync(employeeDTO);
                         if (!createdEmployee)
                         {
@@ -129,13 +120,25 @@ namespace Integration_System.Controllers
                         }
                         else
                         {
+                            string role = await _authService.setRole(employeeDTO.DepartmentId);
+                            AuthModel newAuth = new AuthModel
+                            {
+                                UserName = employeeDTO.Email,
+                                Email = employeeDTO.Email,
+                                Password = employeeDTO.PhoneNumber,
+                                Role = role
+                            };
+                            bool resultAuth = await _authDAL.InsertNewUser(newAuth);
+                            if (!resultAuth)
+                            {
+                                _logger.LogError("Failed to create user for employee {FullName} (Attempt by User {User}).", employeeDTO.FullName, User.Identity?.Name);
+                                return StatusCode(StatusCodes.Status500InternalServerError, new ProblemDetails { Title = "Server Error", Detail = "Failed to create user for the employee." });
+                            }
                             _logger.LogInformation("User {User} created employee successfully: {FullName}", User.Identity?.Name, employeeDTO.FullName);
                             return Ok(new { Message = "Employee Inserted successfully." });
                         }
-                    default:
-                        _logger.LogError("Unknown error during employee creation check (Attempt by User {User}).", User.Identity?.Name);
-                        return StatusCode(StatusCodes.Status500InternalServerError, new ProblemDetails { Title = "Server Error", Detail = "Unknown error during employee creation validation." });
-                }
+                   
+                
             }
             catch (Exception ex)
             {

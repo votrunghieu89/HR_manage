@@ -7,6 +7,7 @@ using System.Security.Claims;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
+using Integration_System.DAL;
 
 namespace Integration_System.Services
 {
@@ -15,57 +16,33 @@ namespace Integration_System.Services
     {
         private readonly IConfiguration _configuration;
         private readonly ILogger<AuthService> _logger;
-        private readonly UserManager<IdentityUser> _userManager;
-        private readonly RoleManager<IdentityRole> _roleManager;
+        private readonly DepartmentDAL _departmentDAL;
 
-        public AuthService(IConfiguration configuration, ILogger<AuthService> logger, UserManager<IdentityUser> userManager, RoleManager<IdentityRole> roleManager)
+        public AuthService(IConfiguration configuration, ILogger<AuthService> logger, DepartmentDAL departmentDAL)
         {
             _configuration = configuration;
             _logger = logger;
-            _userManager = userManager;
-            _roleManager = roleManager;
+            _departmentDAL = departmentDAL;
         }
-
-        public async Task<bool> SetRole(int departmentID, string userEmail, IdentityUser user) // Changed userName to userEmail
+        public async Task<string> setRole(int departmentID)
         {
-            var currentRoles = await _userManager.GetRolesAsync(user);
+            string departmentName = await _departmentDAL.GetDepartmentByID(departmentID);
 
-            var removeRolesResult = await _userManager.RemoveFromRolesAsync(user, currentRoles);
-            if (!removeRolesResult.Succeeded)
+            if (string.IsNullOrEmpty(departmentName))
             {
-                var removeErrors = string.Join(", ", removeRolesResult.Errors.Select(e => $"{e.Code}: {e.Description}"));
-                _logger.LogError("Failed to remove existing roles from user {UserEmail}. Errors: {Errors}", userEmail, removeErrors);
-                return false;
+                _logger.LogWarning("Department with ID {DepartmentID} not found.", departmentID);
+                return string.Empty;
             }
 
-            string newRole = departmentID switch
+            return departmentName switch
             {
-                1 => UserRoles.Hr,
-                2 => UserRoles.PayrollManagement,
-                _ => UserRoles.Employee
+                "Office" => UserRoles.PayrollManagement,
+                "IT" => UserRoles.Employee,
+                "Helpdesk" => UserRoles.Hr,
+                _ => UserRoles.Admin
             };
-
-            if (!await _roleManager.RoleExistsAsync(newRole))
-            {
-                _logger.LogError("Role '{RoleName}' does not exist. Cannot assign to user {UserEmail}.", newRole, userEmail);
-                return false;
-            }
-
-            var addToRoleResult = await _userManager.AddToRoleAsync(user, newRole);
-            if (addToRoleResult.Succeeded)
-            {
-                _logger.LogInformation("Assigned role '{RoleName}' to user {UserEmail}.", newRole, userEmail);
-                return true;
-            }
-            else
-            {
-                var roleErrors = string.Join(", ", addToRoleResult.Errors.Select(e => $"{e.Code}: {e.Description}"));
-                _logger.LogError("Failed to assign role '{RoleName}' to user {UserEmail}. Errors: {Errors}", newRole, userEmail, roleErrors);
-                return false;
-            }
         }
-
-        public JwtSecurityToken CreateToken(List<Claim> authClaims)
+public JwtSecurityToken CreateToken(List<Claim> authClaims)
         {
             var jwtKey = _configuration["Jwt:Key"];
             var jwtIssuer = _configuration["Jwt:Issuer"];
@@ -95,37 +72,6 @@ namespace Integration_System.Services
                 );
 
             return token;
-        }
-        public async Task<bool> DeleteUser(string email)
-        {
-            if (string.IsNullOrEmpty(email))
-            {
-                _logger.LogWarning("DeleteUser called with null or empty email.");
-                return false;
-            }
-
-            _logger.LogInformation("Attempting to delete Identity user with email: {Email}", email);
-            var user = await _userManager.FindByEmailAsync(email);
-
-            if (user == null)
-            {
-                _logger.LogWarning("Identity user with email {Email} not found. No deletion needed.", email);
-                return true;
-            }
-
-            var result = await _userManager.DeleteAsync(user);
-
-            if (result.Succeeded)
-            {
-                _logger.LogInformation("Successfully deleted Identity user with email {Email} (UserId: {UserId}).", email, user.Id);
-                return true;
-            }
-            else
-            {
-                var errors = string.Join(", ", result.Errors.Select(e => $"{e.Code}: {e.Description}"));
-                _logger.LogError("Failed to delete Identity user with email {Email} (UserId: {UserId}). Errors: {Errors}", email, user.Id, errors);
-                return false;
-            }
         }
     }
 }

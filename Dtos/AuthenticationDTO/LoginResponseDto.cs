@@ -5,8 +5,8 @@ namespace Integration_System.Dtos.AuthenticationDTO
     {
         public required string Token { get; set; }
         public DateTime Expiration { get; set; }
-        public string? Username { get; set; }
-        public string? Id { get; set; }
-        public List<string>? Roles { get; set; }
+        public string Username { get; set; }
+        public string Id { get; set; }
+        public string Roles { get; set; }
     }
 }
